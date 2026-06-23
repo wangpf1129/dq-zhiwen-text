@@ -126,6 +126,12 @@
         return `${(size / 1024 / 1024).toFixed(1)}MB`;
     }
 
+    function shouldUseSystemShare(options) {
+        const ext = String(options && options.ext || '').toLowerCase();
+        const isMobile = Boolean(options && options.isMobile);
+        return isMobile && (ext === 'mp4' || ext === 'webm');
+    }
+
     return {
         buildExportRenderPlan,
         buildFramePlan,
@@ -134,6 +140,7 @@
         isUsableExportBlob,
         listVideoRecorderTypes,
         selectVideoRecorderType,
+        shouldUseSystemShare,
         scaleToMax
     };
 }));

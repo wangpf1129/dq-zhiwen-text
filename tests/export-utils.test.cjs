@@ -8,7 +8,8 @@ const {
     getExportMimeType,
     isUsableExportBlob,
     listVideoRecorderTypes,
-    selectVideoRecorderType
+    selectVideoRecorderType,
+    shouldUseSystemShare
 } = require('../export-utils.js');
 
 test('iOS video export keeps MP4 format and requested dimensions', () => {
@@ -122,4 +123,11 @@ test('export size formatting does not round tiny files to 0MB', () => {
     assert.equal(formatExportSize(512), '512B');
     assert.equal(formatExportSize(2048), '2KB');
     assert.equal(formatExportSize(1024 * 1024), '1.0MB');
+});
+
+test('system share is used for mobile video but not GIF files', () => {
+    assert.equal(shouldUseSystemShare({ ext: 'mp4', isMobile: true }), true);
+    assert.equal(shouldUseSystemShare({ ext: 'webm', isMobile: true }), true);
+    assert.equal(shouldUseSystemShare({ ext: 'gif', isMobile: true }), false);
+    assert.equal(shouldUseSystemShare({ ext: 'mp4', isMobile: false }), false);
 });

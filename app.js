@@ -3197,12 +3197,19 @@ class FingerprintTextApp {
         return this.getExportUtils().getExportMimeType(ext);
     }
 
+    shouldUseSystemShare(ext) {
+        return this.getExportUtils().shouldUseSystemShare({
+            ext,
+            isMobile: this.isMobileDevice()
+        });
+    }
+
     getExportFileName(ext) {
         return `fingerprint-text-${Date.now()}.${ext}`;
     }
 
     tryShareExportFile(blob, ext) {
-        if (!blob || !this.isMobileDevice() || typeof navigator.share !== 'function' || typeof File !== 'function') {
+        if (!blob || !this.shouldUseSystemShare(ext) || typeof navigator.share !== 'function' || typeof File !== 'function') {
             return false;
         }
 
@@ -3285,7 +3292,7 @@ class FingerprintTextApp {
 
     downloadBlob(blob, ext) {
         if (!blob) return;
-        if (ext !== 'png' && this.tryShareExportFile(blob, ext)) return;
+        if (this.tryShareExportFile(blob, ext)) return;
         this.downloadBlobFallback(blob, ext);
     }
 }
