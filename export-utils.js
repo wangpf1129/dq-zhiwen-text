@@ -70,27 +70,38 @@
         };
     }
 
-    function selectVideoRecorderType(options) {
+    function listVideoRecorderTypes(options) {
         const isTypeSupported = options && options.isTypeSupported;
         if (typeof isTypeSupported !== 'function') {
-            return null;
+            return [];
         }
 
-        const candidates = [
-            { mimeType: 'video/mp4;codecs=h264', ext: 'mp4' },
-            { mimeType: 'video/mp4;codecs=avc1.42E01E', ext: 'mp4' },
+        const mp4Candidates = [
             { mimeType: 'video/mp4', ext: 'mp4' },
+            { mimeType: 'video/mp4;codecs=h264', ext: 'mp4' },
+            { mimeType: 'video/mp4;codecs=avc1.42E01E', ext: 'mp4' }
+        ];
+        const webmCandidates = [
             { mimeType: 'video/webm;codecs=vp9', ext: 'webm' },
             { mimeType: 'video/webm;codecs=vp8', ext: 'webm' },
             { mimeType: 'video/webm', ext: 'webm' }
         ];
+        const candidates = options && options.preferWebm
+            ? webmCandidates.concat(mp4Candidates)
+            : mp4Candidates.concat(webmCandidates);
 
-        for (const candidate of candidates) {
-            if (isTypeSupported(candidate.mimeType)) {
-                return candidate;
+        return candidates.filter((candidate) => {
+            try {
+                return isTypeSupported(candidate.mimeType);
+            } catch (error) {
+                return false;
             }
-        }
-        return null;
+        });
+    }
+
+    function selectVideoRecorderType(options) {
+        const profiles = listVideoRecorderTypes(options);
+        return profiles.length ? profiles[0] : null;
     }
 
     function getExportMimeType(ext) {
@@ -103,10 +114,25 @@
         return typeMap[ext] || 'application/octet-stream';
     }
 
+    function isUsableExportBlob(blob, options) {
+        const minBytes = Math.max(1, Number(options && options.minBytes) || 1024);
+        return Boolean(blob && Number(blob.size) >= minBytes);
+    }
+
+    function formatExportSize(bytes) {
+        const size = Math.max(0, Math.round(Number(bytes) || 0));
+        if (size < 1024) return `${size}B`;
+        if (size < 1024 * 1024) return `${Math.round(size / 1024)}KB`;
+        return `${(size / 1024 / 1024).toFixed(1)}MB`;
+    }
+
     return {
         buildExportRenderPlan,
         buildFramePlan,
+        formatExportSize,
         getExportMimeType,
+        isUsableExportBlob,
+        listVideoRecorderTypes,
         selectVideoRecorderType,
         scaleToMax
     };

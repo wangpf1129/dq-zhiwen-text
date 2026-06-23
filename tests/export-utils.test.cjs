@@ -4,7 +4,10 @@ const test = require('node:test');
 const {
     buildExportRenderPlan,
     buildFramePlan,
+    formatExportSize,
     getExportMimeType,
+    isUsableExportBlob,
+    listVideoRecorderTypes,
     selectVideoRecorderType
 } = require('../export-utils.js');
 
@@ -58,6 +61,31 @@ test('video recorder prefers playable MP4 before webm fallback', () => {
     assert.deepEqual(profile, { mimeType: 'video/mp4', ext: 'mp4' });
 });
 
+test('video recorder exposes all supported profiles for retry', () => {
+    const supported = new Set(['video/mp4', 'video/webm;codecs=vp8']);
+    const profiles = listVideoRecorderTypes({
+        isTypeSupported: (mimeType) => supported.has(mimeType)
+    });
+
+    assert.deepEqual(profiles, [
+        { mimeType: 'video/mp4', ext: 'mp4' },
+        { mimeType: 'video/webm;codecs=vp8', ext: 'webm' }
+    ]);
+});
+
+test('video recorder can prefer webm for non-iOS mobile retry order', () => {
+    const supported = new Set(['video/mp4', 'video/webm;codecs=vp8']);
+    const profiles = listVideoRecorderTypes({
+        isTypeSupported: (mimeType) => supported.has(mimeType),
+        preferWebm: true
+    });
+
+    assert.deepEqual(profiles, [
+        { mimeType: 'video/webm;codecs=vp8', ext: 'webm' },
+        { mimeType: 'video/mp4', ext: 'mp4' }
+    ]);
+});
+
 test('video recorder uses webm when MP4 recording is unavailable', () => {
     const supported = new Set(['video/webm;codecs=vp8']);
     const profile = selectVideoRecorderType({
@@ -79,4 +107,17 @@ test('export mime type maps video extensions to browser-shareable files', () => 
     assert.equal(getExportMimeType('mp4'), 'video/mp4');
     assert.equal(getExportMimeType('webm'), 'video/webm');
     assert.equal(getExportMimeType('gif'), 'image/gif');
+});
+
+test('export blob validity rejects empty recorder output', () => {
+    assert.equal(isUsableExportBlob({ size: 0 }), false);
+    assert.equal(isUsableExportBlob({ size: 512 }), false);
+    assert.equal(isUsableExportBlob({ size: 2048 }), true);
+});
+
+test('export size formatting does not round tiny files to 0MB', () => {
+    assert.equal(formatExportSize(0), '0B');
+    assert.equal(formatExportSize(512), '512B');
+    assert.equal(formatExportSize(2048), '2KB');
+    assert.equal(formatExportSize(1024 * 1024), '1.0MB');
 });

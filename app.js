@@ -2091,13 +2091,47 @@ class FingerprintTextApp {
         return this.getExportUtils().buildFramePlan({ durationMs, fps, maxFrames });
     }
 
-    selectVideoRecorderType() {
+    listVideoRecorderTypes() {
         if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== 'function') {
-            return null;
+            return [];
         }
-        return this.getExportUtils().selectVideoRecorderType({
-            isTypeSupported: window.MediaRecorder.isTypeSupported.bind(window.MediaRecorder)
+        return this.getExportUtils().listVideoRecorderTypes({
+            isTypeSupported: window.MediaRecorder.isTypeSupported.bind(window.MediaRecorder),
+            preferWebm: this.isMobileDevice() && !this.isIOSDevice()
         });
+    }
+
+    isUsableExportBlob(blob) {
+        return this.getExportUtils().isUsableExportBlob(blob);
+    }
+
+    formatExportSize(bytes) {
+        return this.getExportUtils().formatExportSize(bytes);
+    }
+
+    createCanvasCapture(canvas, fps) {
+        const stopStream = (stream) => stream.getTracks().forEach(track => track.stop());
+        try {
+            const manualStream = canvas.captureStream(0);
+            const manualTrack = manualStream.getVideoTracks()[0];
+            if (manualTrack && typeof manualTrack.requestFrame === 'function') {
+                return {
+                    stream: manualStream,
+                    videoTrack: manualTrack,
+                    requestFrame: () => manualTrack.requestFrame()
+                };
+            }
+            stopStream(manualStream);
+        } catch (error) {
+            console.warn('手动帧捕获不可用，改用自动帧率:', error);
+        }
+
+        const stream = canvas.captureStream(fps);
+        return {
+            stream,
+            videoTrack: stream.getVideoTracks()[0],
+            requestFrame: null
+        };
     }
 
     recordCanvasVideo(canvases, framePlan, duration, isScanMode, recorderProfile) {
@@ -2108,7 +2142,8 @@ class FingerprintTextApp {
 
         const chunks = [];
         const captureFps = Math.max(1, Math.round(Number(framePlan.fps) || 1));
-        const stream = canvas.captureStream(captureFps);
+        const capture = this.createCanvasCapture(canvas, captureFps);
+        const stream = capture.stream;
         const options = recorderProfile.mimeType ? { mimeType: recorderProfile.mimeType } : {};
         let recorder;
 
@@ -2119,7 +2154,6 @@ class FingerprintTextApp {
             throw error;
         }
 
-        const videoTrack = stream.getVideoTracks()[0];
         const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         const stopTracks = () => stream.getTracks().forEach(track => track.stop());
         const recorderMimeType = recorder.mimeType || recorderProfile.mimeType;
@@ -2156,11 +2190,16 @@ class FingerprintTextApp {
                 stopTracks();
                 if (settled) return;
                 settled = true;
-                resolve(new Blob(chunks, { type: recorderMimeType }));
+                const blob = new Blob(chunks, { type: recorderMimeType });
+                if (!this.isUsableExportBlob(blob)) {
+                    reject(new Error('视频录制结果为空'));
+                    return;
+                }
+                resolve(blob);
             };
 
             try {
-                recorder.start();
+                recorder.start(250);
             } catch (error) {
                 fail(error);
                 return;
@@ -2168,17 +2207,22 @@ class FingerprintTextApp {
 
             (async () => {
                 try {
+                    await wait(50);
+                    const startedAt = performance.now();
                     for (let i = 0; i < framePlan.totalFrames; i++) {
                         if (this.exportCancel) throw new Error('cancelled');
 
                         const progress = framePlan.progressAt(i);
                         this.renderExportFrame(canvases, progress, duration, isScanMode);
-                        if (videoTrack && typeof videoTrack.requestFrame === 'function') {
-                            videoTrack.requestFrame();
-                        }
+                        if (capture.requestFrame) capture.requestFrame();
 
-                        this.updateProgress(Math.floor(((i + 1) / framePlan.totalFrames) * 95), '录制视频...');
-                        await wait(framePlan.frameDurationMs);
+                        this.updateProgress(
+                            Math.floor(((i + 1) / framePlan.totalFrames) * 95),
+                            `录制${recorderProfile.ext.toUpperCase()}视频...`
+                        );
+                        const targetElapsed = (i + 1) * framePlan.frameDurationMs;
+                        const delay = targetElapsed - (performance.now() - startedAt);
+                        await wait(Math.max(0, delay));
                     }
 
                     this.updateProgress(95, '整理视频...');
@@ -2578,9 +2622,9 @@ class FingerprintTextApp {
             const previewCtx = previewCanvas.getContext('2d');
             previewCtx.drawImage(canvases.outputCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
 
-            const sizeMB = blob ? (blob.size / 1024 / 1024).toFixed(1) : '?';
+            const sizeInfo = this.formatExportSize(blob ? blob.size : 0);
             document.getElementById('previewSizeInfo').textContent =
-                `${plan.outputDims.width} × ${plan.outputDims.height} px · ${framePlan.totalFrames}帧 · ${plan.fps}fps${this.formatScaledInfo(plan)} · ${sizeMB}MB`;
+                `${plan.outputDims.width} × ${plan.outputDims.height} px · ${framePlan.totalFrames}帧 · ${plan.fps}fps${this.formatScaledInfo(plan)} · ${sizeInfo}`;
 
             this._pendingExportBlob = blob;
             this._pendingExportExt = 'gif';
@@ -2946,20 +2990,26 @@ class FingerprintTextApp {
                 });
             };
 
-            const recorderProfile = this.selectVideoRecorderType();
-            if (recorderProfile) {
+            const recorderProfiles = this.listVideoRecorderTypes();
+            for (const recorderProfile of recorderProfiles) {
                 try {
                     videoBlob = await this.recordCanvasVideo(canvases, framePlan, duration, isScanMode, recorderProfile);
                     ext = recorderProfile.ext;
+                    break;
                 } catch (recordError) {
                     if (recordError.message === 'cancelled') throw recordError;
-                    console.warn('Native video recording failed, falling back to GIF:', recordError);
+                    console.warn(`Native video recording failed for ${recorderProfile.mimeType}:`, recordError);
+                }
+            }
+
+            if (!videoBlob) {
+                if (recorderProfiles.length) {
                     videoBlob = await encodeGifFallback('视频录制不可用，生成GIF...');
                     ext = 'gif';
+                } else {
+                    videoBlob = await encodeGifFallback('当前浏览器不支持可播放视频，生成GIF...');
+                    ext = 'gif';
                 }
-            } else {
-                videoBlob = await encodeGifFallback('当前浏览器不支持可播放视频，生成GIF...');
-                ext = 'gif';
             }
 
             this.renderExportFrame(canvases, 1, duration, isScanMode);
@@ -2969,9 +3019,9 @@ class FingerprintTextApp {
             const previewCtx = previewCanvas.getContext('2d');
             previewCtx.drawImage(canvases.outputCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
 
-            const sizeMB = videoBlob ? (videoBlob.size / 1024 / 1024).toFixed(1) : '?';
+            const sizeInfo = this.formatExportSize(videoBlob ? videoBlob.size : 0);
             document.getElementById('previewSizeInfo').textContent =
-                `${plan.outputDims.width} × ${plan.outputDims.height} px · ${framePlan.totalFrames}帧 · ${plan.fps}fps${this.formatScaledInfo(plan)} · ${ext.toUpperCase()} · ${sizeMB}MB`;
+                `${plan.outputDims.width} × ${plan.outputDims.height} px · ${framePlan.totalFrames}帧 · ${plan.fps}fps${this.formatScaledInfo(plan)} · ${ext.toUpperCase()} · ${sizeInfo}`;
 
             this._pendingExportBlob = videoBlob;
             this._pendingExportExt = ext;
