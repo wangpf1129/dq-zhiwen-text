@@ -11,7 +11,7 @@ const {
     selectVideoRecorderType
 } = require('../export-utils.js');
 
-test('iOS video export keeps MP4 format while downscaling encoded frames', () => {
+test('iOS video export keeps MP4 format while preserving readable encoded frames', () => {
     const plan = buildExportRenderPlan({
         dims: { width: 1080, height: 1440 },
         format: 'mp4',
@@ -20,7 +20,7 @@ test('iOS video export keeps MP4 format while downscaling encoded frames', () =>
     });
 
     assert.deepEqual(plan.layoutDims, { width: 1080, height: 1440 });
-    assert.deepEqual(plan.outputDims, { width: 360, height: 480 });
+    assert.deepEqual(plan.outputDims, { width: 720, height: 960 });
     assert.equal(plan.outputFormat, 'mp4');
     assert.equal(plan.fps, 10);
     assert.equal(plan.maxFrames, 60);

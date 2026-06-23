@@ -34,7 +34,8 @@
         const requestedFps = Math.max(1, Math.round(Number(options.fps) || (format === 'mp4' ? 24 : 15)));
         const fps = isIOS ? Math.min(requestedFps, 10) : requestedFps;
         const outputFormat = format;
-        const outputDims = isIOS ? scaleToMax(dims, 480) : dims;
+        const mobileMaxDim = format === 'mp4' ? 960 : 480;
+        const outputDims = isIOS ? scaleToMax(dims, mobileMaxDim) : dims;
 
         return {
             fps,
