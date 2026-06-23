@@ -28,20 +28,34 @@ test('iOS video export keeps MP4 format and requested dimensions', () => {
     assert.equal(plan.usesScaledOutput, false);
 });
 
-test('iOS GIF export remains GIF and requested dimensions', () => {
+test('mobile GIF export uses album-safe dimensions while keeping requested layout', () => {
     const plan = buildExportRenderPlan({
         dims: { width: 1080, height: 1440 },
         format: 'gif',
         fps: 15,
-        isIOS: true
+        isMobile: true
     });
 
     assert.deepEqual(plan.layoutDims, { width: 1080, height: 1440 });
-    assert.deepEqual(plan.outputDims, { width: 1080, height: 1440 });
+    assert.deepEqual(plan.outputDims, { width: 960, height: 1280 });
     assert.equal(plan.outputFormat, 'gif');
-    assert.equal(plan.fps, 10);
-    assert.equal(plan.maxFrames, 50);
-    assert.equal(plan.usesScaledOutput, false);
+    assert.equal(plan.fps, 15);
+    assert.equal(plan.maxFrames, 100);
+    assert.equal(plan.usesScaledOutput, true);
+});
+
+test('mobile 4K GIF export scales to album-safe dimensions', () => {
+    const plan = buildExportRenderPlan({
+        dims: { width: 2160, height: 3840 },
+        format: 'gif',
+        fps: 15,
+        isMobile: true
+    });
+
+    assert.deepEqual(plan.layoutDims, { width: 2160, height: 3840 });
+    assert.deepEqual(plan.outputDims, { width: 720, height: 1280 });
+    assert.equal(plan.outputFormat, 'gif');
+    assert.equal(plan.usesScaledOutput, true);
 });
 
 test('frame plan preserves duration when capped to fewer mobile frames', () => {
@@ -125,9 +139,9 @@ test('export size formatting does not round tiny files to 0MB', () => {
     assert.equal(formatExportSize(1024 * 1024), '1.0MB');
 });
 
-test('system share is used for mobile video but not GIF files', () => {
+test('system share is used for mobile video and GIF files', () => {
     assert.equal(shouldUseSystemShare({ ext: 'mp4', isMobile: true }), true);
     assert.equal(shouldUseSystemShare({ ext: 'webm', isMobile: true }), true);
-    assert.equal(shouldUseSystemShare({ ext: 'gif', isMobile: true }), false);
+    assert.equal(shouldUseSystemShare({ ext: 'gif', isMobile: true }), true);
     assert.equal(shouldUseSystemShare({ ext: 'mp4', isMobile: false }), false);
 });

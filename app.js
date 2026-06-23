@@ -2083,7 +2083,8 @@ class FingerprintTextApp {
             dims: this.getExportDimensions(),
             format,
             fps,
-            isIOS: this.isIOSDevice()
+            isIOS: this.isIOSDevice(),
+            isMobile: this.isMobileDevice()
         });
     }
 

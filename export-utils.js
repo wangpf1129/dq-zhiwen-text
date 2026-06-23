@@ -31,10 +31,12 @@
         const dims = normalizeDims(options.dims || {});
         const format = options.format === 'mp4' ? 'mp4' : 'gif';
         const isIOS = Boolean(options.isIOS);
+        const isMobile = Boolean(options.isMobile || isIOS);
         const requestedFps = Math.max(1, Math.round(Number(options.fps) || (format === 'mp4' ? 24 : 15)));
         const fps = isIOS ? Math.min(requestedFps, 10) : requestedFps;
         const outputFormat = format;
-        const outputDims = dims;
+        const gifMaxDim = Math.max(1, Math.round(Number(options.gifMaxDim) || 1280));
+        const outputDims = format === 'gif' && isMobile ? scaleToMax(dims, gifMaxDim) : dims;
 
         return {
             fps,
@@ -129,7 +131,7 @@
     function shouldUseSystemShare(options) {
         const ext = String(options && options.ext || '').toLowerCase();
         const isMobile = Boolean(options && options.isMobile);
-        return isMobile && (ext === 'mp4' || ext === 'webm');
+        return isMobile && (ext === 'mp4' || ext === 'webm' || ext === 'gif');
     }
 
     return {
