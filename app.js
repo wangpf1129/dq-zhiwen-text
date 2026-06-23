@@ -80,6 +80,10 @@ class FingerprintTextApp {
             (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     }
 
+    isMobileDevice() {
+        return this.isIOSDevice() || /Android|Mobile|Tablet/i.test(navigator.userAgent);
+    }
+
     createOffscreenCanvas(dims) {
         const canvas = document.createElement('canvas');
         canvas.width = dims.width;
@@ -2087,6 +2091,105 @@ class FingerprintTextApp {
         return this.getExportUtils().buildFramePlan({ durationMs, fps, maxFrames });
     }
 
+    selectVideoRecorderType() {
+        if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== 'function') {
+            return null;
+        }
+        return this.getExportUtils().selectVideoRecorderType({
+            isTypeSupported: window.MediaRecorder.isTypeSupported.bind(window.MediaRecorder)
+        });
+    }
+
+    recordCanvasVideo(canvases, framePlan, duration, isScanMode, recorderProfile) {
+        const canvas = canvases.outputCanvas;
+        if (!canvas.captureStream || !window.MediaRecorder || !recorderProfile) {
+            throw new Error('当前浏览器不支持可播放视频录制');
+        }
+
+        const chunks = [];
+        const captureFps = Math.max(1, Math.round(Number(framePlan.fps) || 1));
+        const stream = canvas.captureStream(captureFps);
+        const options = recorderProfile.mimeType ? { mimeType: recorderProfile.mimeType } : {};
+        let recorder;
+
+        try {
+            recorder = new window.MediaRecorder(stream, options);
+        } catch (error) {
+            stream.getTracks().forEach(track => track.stop());
+            throw error;
+        }
+
+        const videoTrack = stream.getVideoTracks()[0];
+        const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+        const stopTracks = () => stream.getTracks().forEach(track => track.stop());
+        const recorderMimeType = recorder.mimeType || recorderProfile.mimeType;
+
+        const stopRecorder = () => {
+            if (recorder.state !== 'inactive') {
+                if (typeof recorder.requestData === 'function') recorder.requestData();
+                recorder.stop();
+            }
+        };
+
+        return new Promise((resolve, reject) => {
+            let settled = false;
+
+            const fail = (error) => {
+                if (settled) return;
+                settled = true;
+                stopTracks();
+                try {
+                    if (recorder.state !== 'inactive') recorder.stop();
+                } catch (stopError) {
+                    console.warn('停止视频录制失败:', stopError);
+                }
+                reject(error);
+            };
+
+            recorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) chunks.push(event.data);
+            };
+            recorder.onerror = (event) => {
+                fail(event.error || new Error('视频编码失败'));
+            };
+            recorder.onstop = () => {
+                stopTracks();
+                if (settled) return;
+                settled = true;
+                resolve(new Blob(chunks, { type: recorderMimeType }));
+            };
+
+            try {
+                recorder.start();
+            } catch (error) {
+                fail(error);
+                return;
+            }
+
+            (async () => {
+                try {
+                    for (let i = 0; i < framePlan.totalFrames; i++) {
+                        if (this.exportCancel) throw new Error('cancelled');
+
+                        const progress = framePlan.progressAt(i);
+                        this.renderExportFrame(canvases, progress, duration, isScanMode);
+                        if (videoTrack && typeof videoTrack.requestFrame === 'function') {
+                            videoTrack.requestFrame();
+                        }
+
+                        this.updateProgress(Math.floor(((i + 1) / framePlan.totalFrames) * 95), '录制视频...');
+                        await wait(framePlan.frameDurationMs);
+                    }
+
+                    this.updateProgress(95, '整理视频...');
+                    stopRecorder();
+                } catch (error) {
+                    fail(error);
+                }
+            })();
+        });
+    }
+
     makeExportCanvases(plan) {
         const layoutCanvas = this.createOffscreenCanvas(plan.layoutDims);
         const layoutCtx = layoutCanvas.getContext('2d');
@@ -2809,13 +2912,13 @@ class FingerprintTextApp {
 
         try {
             let videoBlob;
-            let ext = plan.outputFormat;
+            let ext = 'mp4';
 
             this.renderExportFrame(canvases, 0, 4000, isScanMode);
             const duration = this.getCurrentExportDurationMs(isScanMode);
             const framePlan = this.buildFramePlan(duration, plan.fps, plan.maxFrames);
 
-            if (plan.outputFormat === 'gif') {
+            const encodeGifFallback = async (status) => {
                 const gifFrames = [];
                 for (let i = 0; i < framePlan.totalFrames; i++) {
                     if (this.exportCancel) throw new Error('cancelled');
@@ -2835,38 +2938,28 @@ class FingerprintTextApp {
                     if (i % 3 === 0) await new Promise(r => setTimeout(r, 0));
                 }
 
-                this.updateProgress(70, '编码GIF...');
+                this.updateProgress(70, status || '编码GIF...');
                 await new Promise(r => setTimeout(r, 50));
 
-                videoBlob = await this.encodeGIF(gifFrames, (p) => {
+                return this.encodeGIF(gifFrames, (p) => {
                     this.updateProgress(70 + Math.floor(p * 25), '编码中...');
                 });
-                ext = 'gif';
-            } else {
-                const frames = [];
-                for (let i = 0; i < framePlan.totalFrames; i++) {
-                    if (this.exportCancel) throw new Error('cancelled');
+            };
 
-                    const progress = framePlan.progressAt(i);
-                    this.renderExportFrame(canvases, progress, duration, isScanMode);
-
-                    const blob = await new Promise(resolve => canvases.outputCanvas.toBlob(resolve, 'image/jpeg', 0.85));
-                    if (blob) {
-                        const ab = await blob.arrayBuffer();
-                        frames.push(new Uint8Array(ab));
-                    }
-
-                    this.updateProgress(Math.floor(((i + 1) / framePlan.totalFrames) * 80), '渲染中...');
-                    if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+            const recorderProfile = this.selectVideoRecorderType();
+            if (recorderProfile) {
+                try {
+                    videoBlob = await this.recordCanvasVideo(canvases, framePlan, duration, isScanMode, recorderProfile);
+                    ext = recorderProfile.ext;
+                } catch (recordError) {
+                    if (recordError.message === 'cancelled') throw recordError;
+                    console.warn('Native video recording failed, falling back to GIF:', recordError);
+                    videoBlob = await encodeGifFallback('视频录制不可用，生成GIF...');
+                    ext = 'gif';
                 }
-
-                this.updateProgress(80, '封装视频...');
-                await new Promise(r => setTimeout(r, 50));
-
-                videoBlob = this.encodeMP4MJPEG(frames, plan.outputDims.width, plan.outputDims.height, plan.fps, (p) => {
-                    this.updateProgress(80 + Math.floor(p * 15), '封装中...');
-                });
-                ext = 'mp4';
+            } else {
+                videoBlob = await encodeGifFallback('当前浏览器不支持可播放视频，生成GIF...');
+                ext = 'gif';
             }
 
             this.renderExportFrame(canvases, 1, duration, isScanMode);
@@ -3050,10 +3143,50 @@ class FingerprintTextApp {
         return new Blob([concat(ftyp, finalMoov, mdat)], { type: 'video/mp4' });
     }
 
-    downloadBlob(blob, ext) {
+    getExportMimeType(ext) {
+        return this.getExportUtils().getExportMimeType(ext);
+    }
+
+    getExportFileName(ext) {
+        return `fingerprint-text-${Date.now()}.${ext}`;
+    }
+
+    tryShareExportFile(blob, ext) {
+        if (!blob || !this.isMobileDevice() || typeof navigator.share !== 'function' || typeof File !== 'function') {
+            return false;
+        }
+
+        const fileName = this.getExportFileName(ext);
+        const file = new File([blob], fileName, { type: blob.type || this.getExportMimeType(ext) });
+        const shareData = {
+            files: [file],
+            title: '指纹文字导出'
+        };
+
+        if (typeof navigator.canShare === 'function' && !navigator.canShare({ files: shareData.files })) {
+            return false;
+        }
+
+        try {
+            const sharePromise = navigator.share(shareData);
+            if (sharePromise && typeof sharePromise.catch === 'function') {
+                sharePromise.catch((error) => {
+                    if (error && error.name === 'AbortError') return;
+                    console.warn('系统分享失败，改用下载:', error);
+                    this.downloadBlobFallback(blob, ext);
+                });
+            }
+            return true;
+        } catch (error) {
+            console.warn('系统分享不可用，改用下载:', error);
+            return false;
+        }
+    }
+
+    downloadBlobFallback(blob, ext) {
         if (!blob) return;
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        const fileName = this.getExportFileName(ext);
+        const isIOS = this.isIOSDevice();
         if (isIOS && ext !== 'png') {
             const url = URL.createObjectURL(blob);
             if (ext === 'gif') {
@@ -3081,7 +3214,7 @@ class FingerprintTextApp {
                 if (!win) {
                     const link = document.createElement('a');
                     link.href = url;
-                    link.download = `fingerprint-text-${Date.now()}.${ext}`;
+                    link.download = fileName;
                     document.body.appendChild(link);
                     link.click();
                     document.body.removeChild(link);
@@ -3091,13 +3224,19 @@ class FingerprintTextApp {
         } else {
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
-            link.download = `fingerprint-text-${Date.now()}.${ext}`;
+            link.download = fileName;
             link.href = url;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
+    }
+
+    downloadBlob(blob, ext) {
+        if (!blob) return;
+        if (ext !== 'png' && this.tryShareExportFile(blob, ext)) return;
+        this.downloadBlobFallback(blob, ext);
     }
 }
 

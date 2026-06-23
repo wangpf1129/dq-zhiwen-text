@@ -70,9 +70,44 @@
         };
     }
 
+    function selectVideoRecorderType(options) {
+        const isTypeSupported = options && options.isTypeSupported;
+        if (typeof isTypeSupported !== 'function') {
+            return null;
+        }
+
+        const candidates = [
+            { mimeType: 'video/mp4;codecs=h264', ext: 'mp4' },
+            { mimeType: 'video/mp4;codecs=avc1.42E01E', ext: 'mp4' },
+            { mimeType: 'video/mp4', ext: 'mp4' },
+            { mimeType: 'video/webm;codecs=vp9', ext: 'webm' },
+            { mimeType: 'video/webm;codecs=vp8', ext: 'webm' },
+            { mimeType: 'video/webm', ext: 'webm' }
+        ];
+
+        for (const candidate of candidates) {
+            if (isTypeSupported(candidate.mimeType)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    function getExportMimeType(ext) {
+        const typeMap = {
+            gif: 'image/gif',
+            mp4: 'video/mp4',
+            png: 'image/png',
+            webm: 'video/webm'
+        };
+        return typeMap[ext] || 'application/octet-stream';
+    }
+
     return {
         buildExportRenderPlan,
         buildFramePlan,
+        getExportMimeType,
+        selectVideoRecorderType,
         scaleToMax
     };
 }));
